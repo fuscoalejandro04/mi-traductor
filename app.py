@@ -18,32 +18,55 @@ def extraer_texto_pdf(archivo):
             texto_completo += texto_pagina + "\n"
     return texto_completo
 
-def traducir_texto(texto, idioma_origen="en", idioma_destino="es"):
+def traducir_texto_con_progreso(texto, idioma_origen="en", idioma_destino="es", max_len=5000):
     """
-    Traduce el texto usando Google Translate (deep-translator).
-    Maneja textos largos dividiéndolos en fragmentos de <= 4500 caracteres.
+    Traduce un texto largo dividiéndolo en fragmentos de hasta max_len caracteres.
+    Muestra una barra de progreso en Streamlit.
     """
     if not texto or not texto.strip():
         return ""
-    
+
+    # Dividir el texto en fragmentos respetando palabras
+    fragmentos = []
+    while len(texto) > max_len:
+        # Buscar un espacio o salto de línea cerca del límite para no cortar palabras
+        corte = texto.rfind(' ', 0, max_len)
+        if corte == -1:  # Si no hay espacio, cortamos exacto
+            corte = max_len
+        fragmentos.append(texto[:corte])
+        texto = texto[corte:].lstrip()  # eliminar espacios sobrantes
+    if texto:
+        fragmentos.append(texto)
+
+    # Configurar barra de progreso
+    barra = st.progress(0, text="Iniciando traducción...")
+    status_text = st.empty()
+
     traductor = GoogleTranslator(source=idioma_origen, target=idioma_destino)
-    
-    # Dividir el texto en fragmentos de 4500 caracteres (dejando margen)
-    max_len = 4500
-    fragmentos = [texto[i:i+max_len] for i in range(0, len(texto), max_len)]
-    
-    # Traducir cada fragmento y unirlos
-    partes_traducidas = []
+    traducciones = []
+    total = len(fragmentos)
+
     for i, frag in enumerate(fragmentos):
-        if frag.strip():
-            try:
-                parte = traductor.translate(frag)
-                partes_traducidas.append(parte)
-            except Exception as e:
-                # Si un fragmento falla, lo agregamos sin traducir (o podrías mostrar un mensaje)
-                partes_traducidas.append(frag)  # opcional: agregar marcador de error
-    
-    return " ".join(partes_traducidas)
+        # Actualizar barra de progreso
+        porcentaje = (i + 1) / total
+        barra.progress(porcentaje, text=f"Traduciendo fragmento {i+1} de {total}...")
+        status_text.text(f"Procesando fragmento {i+1} de {total} ({(porcentaje*100):.0f}%)")
+        
+        # Traducir el fragmento
+        try:
+            traduccion = traductor.translate(frag)
+            traducciones.append(traduccion)
+        except Exception as e:
+            status_text.error(f"Error al traducir el fragmento {i+1}: {str(e)}")
+            # En caso de error, dejamos el fragmento sin traducir
+            traducciones.append(frag)
+
+    # Limpiar mensajes de progreso
+    barra.empty()
+    status_text.empty()
+
+    # Unir todos los fragmentos traducidos
+    return " ".join(traducciones)
 
 def crear_pdf(texto_traducido):
     """
@@ -94,8 +117,8 @@ if archivo_subido is not None:
         
         # 2. Botón para traducir
         if st.button("🌐 Traducir a Español", type="primary"):
-            with st.spinner("Traduciendo... (puede tomar unos segundos)"):
-                texto_traducido = traducir_texto(texto_original)
+            # Llamamos a la función con barra de progreso
+            texto_traducido = traducir_texto_con_progreso(texto_original)
             
             if texto_traducido:
                 st.subheader("🇪🇸 Texto traducido (Español)")
