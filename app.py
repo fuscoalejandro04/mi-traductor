@@ -19,12 +19,31 @@ def extraer_texto_pdf(archivo):
     return texto_completo
 
 def traducir_texto(texto, idioma_origen="en", idioma_destino="es"):
-    """Traduce el texto usando Google Translate (deep-translator)."""
+    """
+    Traduce el texto usando Google Translate (deep-translator).
+    Maneja textos largos dividiéndolos en fragmentos de <= 4500 caracteres.
+    """
     if not texto or not texto.strip():
         return ""
+    
     traductor = GoogleTranslator(source=idioma_origen, target=idioma_destino)
-    # deep-translator maneja textos largos internamente, pero por seguridad lo pasamos tal cual
-    return traductor.translate(texto)
+    
+    # Dividir el texto en fragmentos de 4500 caracteres (dejando margen)
+    max_len = 4500
+    fragmentos = [texto[i:i+max_len] for i in range(0, len(texto), max_len)]
+    
+    # Traducir cada fragmento y unirlos
+    partes_traducidas = []
+    for i, frag in enumerate(fragmentos):
+        if frag.strip():
+            try:
+                parte = traductor.translate(frag)
+                partes_traducidas.append(parte)
+            except Exception as e:
+                # Si un fragmento falla, lo agregamos sin traducir (o podrías mostrar un mensaje)
+                partes_traducidas.append(frag)  # opcional: agregar marcador de error
+    
+    return " ".join(partes_traducidas)
 
 def crear_pdf(texto_traducido):
     """
