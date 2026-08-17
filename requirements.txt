@@ -1,4 +1,4 @@
 streamlit
-pypdf
+PyMuPDF
 deep-translator
 reportlab
