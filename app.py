@@ -13,61 +13,90 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from xml.sax.saxutils import escape
 import os
 import time
+import json
+import hashlib
 from datetime import datetime
 
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN INDUSTRIAL Y PARÁMETROS
 # ============================================================
 MAX_CHARS_PER_FRAGMENT = 4500
 FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "DejaVuSans.ttf")
-# Reducimos los workers a 3 para evitar el Rate Limiting (Error 500) de Google
-WORKERS_PARALELOS = 3 
+CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), ".checkpoints")
+
+# Reglas estrictas de arquitectura según la devolución
+WORKERS_PARALELOS = 2
+TAMANO_LOTE = 15
+PAUSA_BASE_ENTRE_LOTES = 3.0
+
+# Crear directorio de checkpoints si no existe
+if not os.path.exists(CHECKPOINT_DIR):
+    os.makedirs(CHECKPOINT_DIR)
+
+# ============================================================
+# FUNCIONES DE CHECKPOINT (PERSISTENCIA EN DISCO)
+# ============================================================
+def generar_hash_archivo(pdf_bytes):
+    """Genera un ID único para el PDF basado en su contenido."""
+    return hashlib.md5(pdf_bytes).hexdigest()
+
+def cargar_checkpoint(file_hash):
+    """Carga el progreso guardado en disco si existe."""
+    filepath = os.path.join(CHECKPOINT_DIR, f"{file_hash}.json")
+    if os.path.exists(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"resultados": {}, "errores_totales": 0, "ultimo_indice": -1}
+
+def guardar_checkpoint(file_hash, resultados_dict, errores, ultimo_indice):
+    """Guarda atómicamente el progreso del lote en el disco."""
+    filepath = os.path.join(CHECKPOINT_DIR, f"{file_hash}.json")
+    temp_filepath = filepath + ".tmp"
+    
+    data = {
+        "resultados": resultados_dict,
+        "errores_totales": errores,
+        "ultimo_indice": ultimo_indice
+    }
+    
+    # Escritura atómica para evitar corrupción si se corta la luz justo al guardar
+    with open(temp_filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(temp_filepath, filepath)
 
 # ============================================================
 # FUNCIONES DE ESTRUCTURA CON PYMUPDF
 # ============================================================
 def detectar_estructura_pymupdf(pdf_bytes):
-    """
-    Usa PyMuPDF para agrupar automáticamente párrafos y detectar títulos
-    basándose en el tamaño de la fuente.
-    """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     bloques_estructurados = []
-    
-    # Variables para calcular el tamaño de fuente promedio (texto normal)
     tamanos_fuentes = {}
     
-    # Pasada 1: Identificar el tamaño de fuente del cuerpo del texto
+    # Pasada 1: Muestreo
     for pagina in doc:
         bloques = pagina.get_text("dict")["blocks"]
         for b in bloques:
-            if b["type"] == 0:  # Tipo 0 es texto
+            if b["type"] == 0:
                 for linea in b["lines"]:
                     for span in linea["spans"]:
                         size = round(span["size"], 1)
                         tamanos_fuentes[size] = tamanos_fuentes.get(size, 0) + len(span["text"])
                         
-    # El tamaño de fuente con más caracteres es el "texto normal"
-    if tamanos_fuentes:
-        fuente_base = max(tamanos_fuentes, key=tamanos_fuentes.get)
-    else:
-        fuente_base = 10.0
+    fuente_base = max(tamanos_fuentes, key=tamanos_fuentes.get) if tamanos_fuentes else 10.0
 
-    # Pasada 2: Extraer bloques reales
+    # Pasada 2: Extracción con filtrado geométrico (10% superior/inferior)
     for num_pag, pagina in enumerate(doc, start=1):
         alto_pagina = pagina.rect.height
         bloques = pagina.get_text("dict")["blocks"]
         
         for b in bloques:
             if b["type"] == 0:
-                # Filtrar encabezados/pies de página (ignorar top 10% y bottom 10%)
                 y0 = b["bbox"][1]
                 if y0 < alto_pagina * 0.10 or y0 > alto_pagina * 0.90:
                     continue
 
                 texto_bloque = ""
                 max_size_in_block = 0
-                
                 for linea in b["lines"]:
                     for span in linea["spans"]:
                         texto_bloque += span["text"] + " "
@@ -78,7 +107,6 @@ def detectar_estructura_pymupdf(pdf_bytes):
                 if len(texto_bloque) < 2:
                     continue
                 
-                # Heurística de jerarquía basada en tamaño de fuente
                 if max_size_in_block > fuente_base + 3:
                     tipo = 'titulo_capitulo'
                 elif max_size_in_block > fuente_base + 1:
@@ -91,17 +119,16 @@ def detectar_estructura_pymupdf(pdf_bytes):
     return bloques_estructurados
 
 # ============================================================
-# TRADUCCIÓN PARALELA CON MANEJO DE ERRORES
+# TRADUCCIÓN CON RATE LIMITING Y REINTENTOS LINEALES
 # ============================================================
 def dividir_texto_inteligente(texto, max_len=MAX_CHARS_PER_FRAGMENT):
-    """Divide el texto en fragmentos respetando los puntos y espacios."""
     if len(texto) <= max_len:
         return [texto]
     fragmentos = []
     while len(texto) > max_len:
-        idx = texto.rfind('. ', 0, max_len) # Cortar en puntos
+        idx = texto.rfind('. ', 0, max_len)
         if idx == -1 or idx < max_len * 0.5:
-            idx = texto.rfind(' ', 0, max_len) # Fallback a espacios
+            idx = texto.rfind(' ', 0, max_len)
         if idx == -1: 
             idx = max_len
         fragmentos.append(texto[:idx+1])
@@ -111,13 +138,14 @@ def dividir_texto_inteligente(texto, max_len=MAX_CHARS_PER_FRAGMENT):
     return fragmentos
 
 def traducir_bloque(bloque, idioma_destino):
-    """Traduce un bloque intentando evadir baneos temporales de IP."""
     tipo, contenido, pagina = bloque
     traductor = GoogleTranslator(source='auto', target=idioma_destino)
     
     fragmentos = dividir_texto_inteligente(contenido)
     traducciones = []
-    error = 0
+    error_count = 0
+    reintentos_usados = 0
+    t_inicio = time.time()
     
     for frag in fragmentos:
         intentos = 0
@@ -125,55 +153,92 @@ def traducir_bloque(bloque, idioma_destino):
         while intentos < 3 and not exito:
             try:
                 trad = traductor.translate(frag)
-                
-                # Verificar si la API devolvió su propio mensaje de error web
-                if trad and ("Error 500" in trad or "Server Error" in trad):
-                    raise Exception("Falso positivo: Error 500 devuelto como texto.")
+                if trad and ("Error 500" in trad or "Server Error" in trad or "That's an error" in trad):
+                    raise Exception("Respuesta corrupta (Rate Limit/Error 500)")
                 
                 traducciones.append(trad)
                 exito = True
-                time.sleep(0.5) # Pausa amigable para no saturar la API
-                
-            except Exception as e:
+            except Exception:
                 intentos += 1
-                time.sleep(2 * intentos) # Backoff: Espera 2s, luego 4s, etc.
+                reintentos_usados += 1
+                if intentos < 3:
+                    # Espera lineal exacta solicitada: 3s, 6s, 9s
+                    time.sleep(3 * intentos) 
                 
         if not exito:
-            error += 1
-            traducciones.append(frag) # Conserva el original si falla definitivamente
+            error_count += 1
+            traducciones.append(frag) # Fallback: mantener original
             
-    return (tipo, ' '.join(traducciones), pagina, error)
+    latencia = time.time() - t_inicio
+    return (tipo, ' '.join(traducciones), pagina, error_count, reintentos_usados, latencia)
 
-def traducir_en_paralelo(parrafos, idioma_destino='es'):
-    """Ejecuta las traducciones utilizando hilos paralelos limitados."""
-    barra = st.progress(0, text="Iniciando traducción en paralelo...")
+def procesar_pipeline_industrial(bloques, file_hash, panel_metricas, idioma_destino='es'):
+    """Orquestador principal con Checkpoints y Rate Limiting Adaptativo."""
+    checkpoint = cargar_checkpoint(file_hash)
+    resultados_dict = checkpoint["resultados"]
+    errores_totales = checkpoint["errores_totales"]
+    total_bloques = len(bloques)
     
-    resultados = [None] * len(parrafos)
-    errores_totales = 0
-    completados = 0
-    total = len(parrafos)
+    # Determinar qué falta procesar
+    indices_faltantes = [i for i in range(total_bloques) if str(i) not in resultados_dict]
     
-    with ThreadPoolExecutor(max_workers=WORKERS_PARALELOS) as executor:
-        futuros = {executor.submit(traducir_bloque, b, idioma_destino): i for i, b in enumerate(parrafos)}
+    if not indices_faltantes:
+        return [resultados_dict[str(i)] for i in range(total_bloques)], errores_totales
         
-        for futuro in as_completed(futuros):
-            idx = futuros[futuro]
-            tipo, trad, pag, err = futuro.result()
-            resultados[idx] = (tipo, trad, pag)
-            errores_totales += err
-            completados += 1
+    pausa_adaptativa = PAUSA_BASE_ENTRE_LOTES
+    lotes = [indices_faltantes[i:i + TAMANO_LOTE] for i in range(0, len(indices_faltantes), TAMANO_LOTE)]
+    
+    bloques_procesados_hoy = 0
+    reintentos_sesion = 0
+    
+    for idx_lote, lote_indices in enumerate(lotes):
+        sub_resultados = {}
+        reintentos_lote = 0
+        
+        with ThreadPoolExecutor(max_workers=WORKERS_PARALELOS) as executor:
+            # Enviar solo los bloques correspondientes a los índices del lote
+            futuros = {executor.submit(traducir_bloque, bloques[idx], idioma_destino): idx for idx in lote_indices}
             
-            if completados % 5 == 0 or completados == total:
-                barra.progress(completados / total, text=f"Traduciendo... {completados}/{total} bloques")
+            for futuro in as_completed(futuros):
+                idx_interno = futuros[futuro]
+                tipo, trad, pag, err, reint, lat = futuro.result()
                 
-    barra.empty()
-    return resultados, errores_totales
+                sub_resultados[str(idx_interno)] = (tipo, trad, pag)
+                errores_totales += err
+                reintentos_lote += reint
+                reintentos_sesion += reint
+                bloques_procesados_hoy += 1
+        
+        # Consolidar progreso
+        resultados_dict.update(sub_resultados)
+        guardar_checkpoint(file_hash, resultados_dict, errores_totales, max(lote_indices))
+        
+        # Rate Limiting Adaptativo
+        if reintentos_lote > 0:
+            pausa_adaptativa = min(pausa_adaptativa + 2.0, 10.0) # Penalización si hay fallos
+        else:
+            pausa_adaptativa = max(PAUSA_BASE_ENTRE_LOTES, pausa_adaptativa - 0.5) # Recuperación
+        
+        # Actualizar Panel UI (Observabilidad)
+        progreso_global = len(resultados_dict) / total_bloques
+        with panel_metricas.container():
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Progreso Global", f"{len(resultados_dict)} / {total_bloques}")
+            col2.metric("Reintentos de Red", f"{reintentos_sesion}")
+            col3.metric("Pausa Adaptativa (Anti-Ban)", f"{pausa_adaptativa:.1f} s")
+            st.progress(progreso_global)
+            
+        if idx_lote < len(lotes) - 1:
+            time.sleep(pausa_adaptativa)
+
+    # Reconstruir la lista final ordenada
+    lista_final_ordenada = [resultados_dict[str(i)] for i in range(total_bloques)]
+    return lista_final_ordenada, errores_totales
 
 # ============================================================
-# GENERACIÓN DE PDF Y LOG
+# GENERACIÓN DE PDF Y LOGS
 # ============================================================
 def add_page_number(canvas, doc):
-    """Agrega número de página al pie del PDF generado."""
     page_num = canvas.getPageNumber()
     canvas.saveState()
     canvas.setFont('DejaVuSans', 9)
@@ -181,13 +246,11 @@ def add_page_number(canvas, doc):
     canvas.restoreState()
 
 def generar_pdf_estructurado(resultado_traduccion):
-    """Construye el PDF aplicando estilos académicos."""
     if not os.path.exists(FONT_PATH):
-        st.error(f"Falta la fuente en {FONT_PATH}")
+        st.error(f"Falta archivo tipográfico en: {FONT_PATH}")
         st.stop()
         
     pdfmetrics.registerFont(TTFont("DejaVuSans", FONT_PATH))
-
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4,
@@ -222,84 +285,100 @@ def generar_pdf_estructurado(resultado_traduccion):
     buffer.seek(0)
     return buffer.getvalue()
 
-def generar_log(resultado_traduccion, errores, tiempo_inicio):
-    """Genera un archivo de log con estadísticas del proceso."""
-    lineas = []
-    lineas.append("="*60)
-    lineas.append("LOG DE TRADUCCIÓN DE PDF")
-    lineas.append(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lineas.append(f"Tiempo total: {tiempo_inicio:.2f} segundos")
-    lineas.append(f"Fragmentos con error (no traducidos): {errores}")
-    lineas.append("-"*60)
-
-    total_texto = 0
-    total_titulos = 0
-    for tipo, _, _ in resultado_traduccion:
-        if tipo == 'texto':
-            total_texto += 1
-        else:
-            total_titulos += 1
-    lineas.append(f"Total de párrafos de texto procesados: {total_texto}")
-    lineas.append(f"Total de títulos procesados: {total_titulos}")
-    lineas.append("-"*60)
-
-    lineas.append("Estructura final (primeros 20 elementos):")
-    for i, (tipo, contenido, pagina) in enumerate(resultado_traduccion[:20]):
-        lineas.append(f"  {i+1:3d}. {tipo:20s} | Pág {pagina:3d} | {contenido[:50]}...")
-    if len(resultado_traduccion) > 20:
-        lineas.append(f"  ... y {len(resultado_traduccion)-20} elementos más.")
-
+def generar_log(resultado_traduccion, errores, tiempo_total):
+    lineas = [
+        "="*60, "LOG AUTOMÁTICO DE PROCESAMIENTO INDUSTRIAL",
+        f"Fecha ejecución: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Tiempo total invertido en sesión: {tiempo_total:.2f} segundos",
+        f"Bloques con error definitivo (mantenidos en original): {errores}",
+        "-"*60
+    ]
+    total_texto = sum(1 for t, _, _ in resultado_traduccion if t == 'texto')
+    lineas.append(f"Párrafos procesados: {total_texto}")
+    lineas.append(f"Títulos formateados: {len(resultado_traduccion) - total_texto}")
     lineas.append("="*60)
     return "\n".join(lineas)
 
 # ============================================================
 # INTERFAZ STREAMLIT
 # ============================================================
-st.set_page_config(page_title="Traductor Académico de PDFs", layout="centered")
-st.title("📚 Traductor de PDFs Académicos V2")
-st.markdown("Sube tu documento PDF. La herramienta detectará la estructura, filtrará los encabezados y utilizará procesamiento en paralelo optimizado para evitar bloqueos del servidor.")
+st.set_page_config(page_title="Traductor Académico Automático", layout="centered")
+st.title("📚 Traductor de PDFs Académicos Profesional")
+st.markdown("Motor industrial tolerante a fallos. Soporta desconexiones gracias a su sistema de **Checkpoints atómicos en disco**.")
 
-archivo_subido = st.file_uploader("Elige tu archivo PDF", type="pdf")
+# Inicialización segura
+if "pdf_final" not in st.session_state: st.session_state.pdf_final = None
+if "log_texto" not in st.session_state: st.session_state.log_texto = None
+if "traduccion_lista" not in st.session_state: st.session_state.traduccion_lista = False
+
+archivo_subido = st.file_uploader("Sube el documento PDF completo aquí", type="pdf")
 
 if archivo_subido is not None:
     pdf_bytes = archivo_subido.read()
+    file_hash = generar_hash_archivo(pdf_bytes) # ID Único para el checkpoint
     
-    with st.spinner("Analizando fuentes y estructura del documento..."):
-        bloques = detectar_estructura_pymupdf(pdf_bytes)
-        
-    st.success(f"✅ Estructura detectada: {len(bloques)} bloques de texto y títulos.")
+    if "bloques_detectados" not in st.session_state or st.session_state.get("archivo_actual") != archivo_subido.name:
+        with st.spinner("Analizando topología y buscando Checkpoints previos..."):
+            st.session_state.bloques_detectados = detectar_estructura_pymupdf(pdf_bytes)
+            st.session_state.archivo_actual = archivo_subido.name
+            st.session_state.traduccion_lista = False
+            
+            # Verificar si existe checkpoint previo para informar al usuario
+            chk = cargar_checkpoint(file_hash)
+            st.session_state.progreso_previo = len(chk["resultados"])
+            
+    total_bloques = len(st.session_state.bloques_detectados)
+    
+    if st.session_state.progreso_previo > 0 and st.session_state.progreso_previo < total_bloques:
+        st.warning(f"⚠️ Se detectó una sesión previa interrumpida. El sistema se reanudará automáticamente desde el bloque {st.session_state.progreso_previo}.")
+    else:
+        st.success(f"✅ Análisis completado: {total_bloques} bloques estructurados.")
 
-    with st.expander("Ver estructura detectada (primeros 10 elementos)"):
-        for i, (tipo, contenido, pagina) in enumerate(bloques[:10]):
-            st.write(f"{i+1}. [{tipo}] Pág {pagina}: {contenido[:80]}...")
+    # Panel vacío reservado para la observabilidad
+    panel_metricas = st.empty()
 
-    if st.button("🌐 Iniciar Traducción Segura", type="primary"):
+    if st.button("🚀 Iniciar Procesamiento Industrial", type="primary"):
         t_inicio = time.time()
         
-        resultados, errores = traducir_en_paralelo(bloques)
+        # Ejecutar el Pipeline Orquestador
+        resultados, errores = procesar_pipeline_industrial(
+            st.session_state.bloques_detectados, 
+            file_hash, 
+            panel_metricas
+        )
         
         t_total = time.time() - t_inicio
-        st.info(f"📊 Traducción completada en {t_total:.1f} seg. ({errores} fragmentos fallidos o devueltos en idioma original).")
+        st.info(f"📊 Pipeline finalizado con éxito en {t_total:.1f} segundos de sesión activa.")
         
-        with st.spinner("Ensamblando PDF final..."):
+        with st.spinner("Compilando archivo PDF final bajo estándar académico..."):
             try:
-                pdf_final = generar_pdf_estructurado(resultados)
+                st.session_state.pdf_final = generar_pdf_estructurado(resultados)
+                st.session_state.log_texto = generar_log(resultados, errores, t_total)
+                st.session_state.traduccion_lista = True
                 
-                st.download_button(
-                    label="📥 Descargar PDF Traducido",
-                    data=pdf_final,
-                    file_name="traduccion_formateada.pdf",
-                    mime="application/pdf",
-                    type="primary"
-                )
-                
-                log_texto = generar_log(resultados, errores, t_total)
-                st.download_button(
-                    label="📋 Descargar LOG del proceso",
-                    data=log_texto,
-                    file_name="traduccion_log.txt",
-                    mime="text/plain"
-                )
-                
+                # Borrar el archivo de checkpoint tras completar al 100% (opcional)
+                filepath = os.path.join(CHECKPOINT_DIR, f"{file_hash}.json")
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    
+                st.rerun() 
             except Exception as e:
-                st.error(f"❌ Error al generar los archivos finales: {e}")
+                st.error(f"❌ Error crítico en compilación: {e}")
+
+# Renderizado de descargas
+if st.session_state.traduccion_lista:
+    st.markdown("---")
+    st.success("🎉 ¡El documento completo ha sido ensamblado!")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            label="📥 Descargar PDF Académico", data=st.session_state.pdf_final,
+            file_name="traduccion_industrial.pdf", mime="application/pdf",
+            use_container_width=True, type="primary"
+        )
+    with col2:
+        st.download_button(
+            label="📋 Descargar Reporte de Calidad", data=st.session_state.log_texto,
+            file_name="reporte_pipeline.txt", mime="text/plain",
+            use_container_width=True
+        )
