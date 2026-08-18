@@ -16,8 +16,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     SimpleDocTemplate, BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, 
-    PageBreak, NextPageTemplate, TableOfContents
+    PageBreak, NextPageTemplate
 )
+from reportlab.platypus.tableofcontents import TableOfContents
 from xml.sax.saxutils import escape
 from datetime import datetime
 
