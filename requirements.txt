@@ -2,3 +2,4 @@ streamlit
 PyMuPDF
 deep-translator
 reportlab
+python-docx
