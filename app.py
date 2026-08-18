@@ -8,10 +8,6 @@ import json
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from deep_translator import GoogleTranslator
-from datetime import datetime
-from xml.sax.saxutils import escape
-
-# Librerías de Exportación: ReportLab (Avanzado)
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER, TA_LEFT
@@ -19,9 +15,11 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, 
+    SimpleDocTemplate, BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, 
     PageBreak, NextPageTemplate, TableOfContents
 )
+from xml.sax.saxutils import escape
+from datetime import datetime
 
 # Librería de Exportación: Word
 from docx import Document
@@ -247,148 +245,140 @@ def procesar_pipeline(bloques, file_hash, ui_metrics, idioma_destino='es'):
 # EXPORTACIÓN A WORD (.DOCX)
 # ============================================================
 def generar_word(resultados):
-    """
-    Genera un documento Word editable utilizando los estilos nativos
-    de Word para conservar una estructura semántica apta para
-    generar un índice automático.
-    """
     documento = Document()
     for tipo, contenido, _ in resultados:
         if not contenido or not contenido.strip():
             continue
             
         if tipo == "titulo_capitulo":
-            parrafo = documento.add_paragraph(contenido, style="Heading 1")[cite: 13]
+            parrafo = documento.add_paragraph(contenido, style="Heading 1")
         elif tipo == "titulo_seccion":
-            parrafo = documento.add_paragraph(contenido, style="Heading 2")[cite: 13]
+            parrafo = documento.add_paragraph(contenido, style="Heading 2")
         else:
-            parrafo = documento.add_paragraph(contenido, style="Normal")[cite: 13]
-            parrafo.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY[cite: 13]
+            parrafo = documento.add_paragraph(contenido, style="Normal")
+            parrafo.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             
     buffer = io.BytesIO()
-    documento.save(buffer)[cite: 13]
-    buffer.seek(0)[cite: 13]
-    return buffer.getvalue()[cite: 13]
+    documento.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ============================================================
 # EXPORTACIÓN A PDF (FORMATO LIBRO)
 # ============================================================
 def generar_pdf_libro(resultados, nombre_archivo="Documento_Traducido.pdf"):
-    """
-    Genera un PDF académico con Portada, Tabla de contenidos automática,
-    Encabezados, pie de página y texto justificado[cite: 13].
-    """
     if not os.path.exists(FONT_PATH):
-        st.error(f"Falta fuente en: {FONT_PATH}")[cite: 13]
-        st.stop()[cite: 13]
+        st.error(f"Falta fuente en: {FONT_PATH}")
+        st.stop()
 
     if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(TTFont("DejaVuSans", FONT_PATH))[cite: 13]
+        pdfmetrics.registerFont(TTFont("DejaVuSans", FONT_PATH))
 
-    buffer = io.BytesIO()[cite: 13]
+    buffer = io.BytesIO()
     doc = BaseDocTemplate(
         buffer, pagesize=A4, leftMargin=25*mm, rightMargin=20*mm, 
         topMargin=25*mm, bottomMargin=25*mm, title="Traducción Académica", 
         author="Traductor Académico Industrial"
-    )[cite: 13]
-    ancho, alto = A4[cite: 13]
+    )
+    ancho, alto = A4
 
-    frame_body = Frame(25*mm, 25*mm, ancho-45*mm, alto-50*mm, id="body")[cite: 13]
-    frame_cover = Frame(0, 0, ancho, alto, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0, id="cover")[cite: 13]
-    frame_toc = Frame(25*mm, 25*mm, ancho-45*mm, alto-50*mm, id="toc")[cite: 13]
+    frame_body = Frame(25*mm, 25*mm, ancho-45*mm, alto-50*mm, id="body")
+    frame_cover = Frame(0, 0, ancho, alto, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0, id="cover")
+    frame_toc = Frame(25*mm, 25*mm, ancho-45*mm, alto-50*mm, id="toc")
 
-    estilos = getSampleStyleSheet()[cite: 13]
-    e_norm = ParagraphStyle("LibroNormal", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=11, leading=15, alignment=TA_JUSTIFY, spaceAfter=10, firstLineIndent=5*mm)[cite: 13]
-    e_cap = ParagraphStyle("LibroCapitulo", parent=estilos["Heading1"], fontName="DejaVuSans", fontSize=16, leading=20, alignment=TA_CENTER, spaceBefore=20, spaceAfter=15, keepWithNext=True)[cite: 13]
-    e_sec = ParagraphStyle("LibroSeccion", parent=estilos["Heading2"], fontName="DejaVuSans", fontSize=13, leading=16, alignment=TA_LEFT, spaceBefore=12, spaceAfter=10, keepWithNext=True)[cite: 13]
-    e_toc_title = ParagraphStyle("TOCTitulo", parent=estilos["Title"], fontName="DejaVuSans", fontSize=20, leading=24, alignment=TA_CENTER, spaceAfter=20)[cite: 13]
-    e_toc_cap = ParagraphStyle("TOCCapitulo", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=11, leading=15, leftIndent=0, firstLineIndent=0, spaceAfter=5)[cite: 13]
-    e_toc_sec = ParagraphStyle("TOCSeccion", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=10, leading=14, leftIndent=10*mm, firstLineIndent=0, spaceAfter=3)[cite: 13]
+    estilos = getSampleStyleSheet()
+    e_norm = ParagraphStyle("LibroNormal", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=11, leading=15, alignment=TA_JUSTIFY, spaceAfter=10, firstLineIndent=5*mm)
+    e_cap = ParagraphStyle("LibroCapitulo", parent=estilos["Heading1"], fontName="DejaVuSans", fontSize=16, leading=20, alignment=TA_CENTER, spaceBefore=20, spaceAfter=15, keepWithNext=True)
+    e_sec = ParagraphStyle("LibroSeccion", parent=estilos["Heading2"], fontName="DejaVuSans", fontSize=13, leading=16, alignment=TA_LEFT, spaceBefore=12, spaceAfter=10, keepWithNext=True)
+    e_toc_title = ParagraphStyle("TOCTitulo", parent=estilos["Title"], fontName="DejaVuSans", fontSize=20, leading=24, alignment=TA_CENTER, spaceAfter=20)
+    e_toc_cap = ParagraphStyle("TOCCapitulo", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=11, leading=15, leftIndent=0, firstLineIndent=0, spaceAfter=5)
+    e_toc_sec = ParagraphStyle("TOCSeccion", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=10, leading=14, leftIndent=10*mm, firstLineIndent=0, spaceAfter=3)
 
     def dibujar_portada(canvas, doc):
-        canvas.saveState()[cite: 13]
-        titulo = Paragraph("Traducción Académica", ParagraphStyle("PortadaTitulo", fontName="DejaVuSans", fontSize=26, leading=32, alignment=TA_CENTER))[cite: 13]
-        subtitulo = Paragraph(escape(nombre_archivo), ParagraphStyle("PortadaArchivo", fontName="DejaVuSans", fontSize=13, leading=18, alignment=TA_CENTER))[cite: 13]
-        _, h_titulo = titulo.wrap(ancho - 40*mm, alto)[cite: 13]
-        _, h_subtitulo = subtitulo.wrap(ancho - 40*mm, alto)[cite: 13]
-        espacio_entre = 10 * mm[cite: 13]
-        alto_total = h_titulo + espacio_entre + h_subtitulo[cite: 13]
-        y_inicio = (alto - alto_total) / 2[cite: 13]
-        titulo.drawOn(canvas, 20*mm, y_inicio + h_subtitulo + espacio_entre)[cite: 13]
-        subtitulo.drawOn(canvas, 20*mm, y_inicio)[cite: 13]
-        canvas.restoreState()[cite: 13]
+        canvas.saveState()
+        titulo = Paragraph("Traducción Académica", ParagraphStyle("PortadaTitulo", fontName="DejaVuSans", fontSize=26, leading=32, alignment=TA_CENTER))
+        subtitulo = Paragraph(escape(nombre_archivo), ParagraphStyle("PortadaArchivo", fontName="DejaVuSans", fontSize=13, leading=18, alignment=TA_CENTER))
+        _, h_titulo = titulo.wrap(ancho - 40*mm, alto)
+        _, h_subtitulo = subtitulo.wrap(ancho - 40*mm, alto)
+        espacio_entre = 10 * mm
+        alto_total = h_titulo + espacio_entre + h_subtitulo
+        y_inicio = (alto - alto_total) / 2
+        titulo.drawOn(canvas, 20*mm, y_inicio + h_subtitulo + espacio_entre)
+        subtitulo.drawOn(canvas, 20*mm, y_inicio)
+        canvas.restoreState()
 
     def dibujar_cuerpo(canvas, doc):
-        canvas.saveState()[cite: 13]
-        pagina = canvas.getPageNumber()[cite: 13]
-        canvas.setLineWidth(0.5)[cite: 13]
-        canvas.line(25*mm, alto - 18*mm, ancho - 20*mm, alto - 18*mm)[cite: 13]
-        canvas.setFont("DejaVuSans", 8)[cite: 13]
-        canvas.drawString(25*mm, alto - 14*mm, "TRADUCCIÓN ACADÉMICA")[cite: 13]
-        canvas.drawRightString(ancho - 20*mm, alto - 14*mm, "Edición académica")[cite: 13]
-        canvas.line(25*mm, 19*mm, ancho - 20*mm, 19*mm)[cite: 13]
-        canvas.setFont("DejaVuSans", 9)[cite: 13]
-        canvas.drawCentredString(ancho / 2, 12*mm, str(pagina))[cite: 13]
-        canvas.restoreState()[cite: 13]
+        canvas.saveState()
+        pagina = canvas.getPageNumber()
+        canvas.setLineWidth(0.5)
+        canvas.line(25*mm, alto - 18*mm, ancho - 20*mm, alto - 18*mm)
+        canvas.setFont("DejaVuSans", 8)
+        canvas.drawString(25*mm, alto - 14*mm, "TRADUCCIÓN ACADÉMICA")
+        canvas.drawRightString(ancho - 20*mm, alto - 14*mm, "Edición académica")
+        canvas.line(25*mm, 19*mm, ancho - 20*mm, 19*mm)
+        canvas.setFont("DejaVuSans", 9)
+        canvas.drawCentredString(ancho / 2, 12*mm, str(pagina))
+        canvas.restoreState()
 
     def dibujar_toc(canvas, doc):
-        canvas.saveState()[cite: 13]
-        canvas.setFont("DejaVuSans", 8)[cite: 13]
-        canvas.drawCentredString(ancho / 2, 12*mm, str(canvas.getPageNumber()))[cite: 13]
-        canvas.restoreState()[cite: 13]
+        canvas.saveState()
+        canvas.setFont("DejaVuSans", 8)
+        canvas.drawCentredString(ancho / 2, 12*mm, str(canvas.getPageNumber()))
+        canvas.restoreState()
 
     doc.addPageTemplates([
-        PageTemplate(id="PORTADA", frames=[frame_cover], onPage=dibujar_portada),[cite: 13]
-        PageTemplate(id="TOC", frames=[frame_toc], onPage=dibujar_toc),[cite: 13]
-        PageTemplate(id="CUERPO", frames=[frame_body], onPage=dibujar_cuerpo)[cite: 13]
-    ])[cite: 13]
+        PageTemplate(id="PORTADA", frames=[frame_cover], onPage=dibujar_portada),
+        PageTemplate(id="TOC", frames=[frame_toc], onPage=dibujar_toc),
+        PageTemplate(id="CUERPO", frames=[frame_body], onPage=dibujar_cuerpo)
+    ])
 
-    toc = TableOfContents()[cite: 13]
+    toc = TableOfContents()
     toc.levelStyles = [
-        ParagraphStyle("TOCLevel1", fontName="DejaVuSans", fontSize=11, leading=15, leftIndent=0, firstLineIndent=0, spaceBefore=5, spaceAfter=3),[cite: 13]
-        ParagraphStyle("TOCLevel2", fontName="DejaVuSans", fontSize=10, leading=14, leftIndent=10*mm, firstLineIndent=0, spaceBefore=2, spaceAfter=2)[cite: 13]
-    ][cite: 13]
+        ParagraphStyle("TOCLevel1", fontName="DejaVuSans", fontSize=11, leading=15, leftIndent=0, firstLineIndent=0, spaceBefore=5, spaceAfter=3),
+        ParagraphStyle("TOCLevel2", fontName="DejaVuSans", fontSize=10, leading=14, leftIndent=10*mm, firstLineIndent=0, spaceBefore=2, spaceAfter=2)
+    ]
 
-    contador_titulos = [0][cite: 13]
+    contador_titulos = [0]
+    
     def after_flowable(flowable):
-        if not isinstance(flowable, Paragraph): return[cite: 13]
-        estilo = flowable.style.name[cite: 13]
-        if estilo == "LibroCapitulo": nivel = 0[cite: 13]
-        elif estilo == "LibroSeccion": nivel = 1[cite: 13]
-        else: return[cite: 13]
+        if not isinstance(flowable, Paragraph): return
+        estilo = flowable.style.name
+        if estilo == "LibroCapitulo": nivel = 0
+        elif estilo == "LibroSeccion": nivel = 1
+        else: return
         
-        texto = flowable.getPlainText()[cite: 13]
-        contador_titulos[0] += 1[cite: 13]
-        key = f"heading_{contador_titulos[0]}"[cite: 13]
+        texto = flowable.getPlainText()
+        contador_titulos[0] += 1
+        key = f"heading_{contador_titulos[0]}"
         
         try:
-            canvas = doc.canv[cite: 13]
-            canvas.bookmarkPage(key)[cite: 13]
-            canvas.addOutlineEntry(texto, key, level=nivel, closed=False)[cite: 13]
+            canvas = doc.canv
+            canvas.bookmarkPage(key)
+            canvas.addOutlineEntry(texto, key, level=nivel, closed=False)
         except Exception:
-            pass[cite: 13]
-        doc.notify("TOCEntry", (nivel, texto, doc.page, key))[cite: 13]
+            pass
+        doc.notify("TOCEntry", (nivel, texto, doc.page, key))
         
-    doc.afterFlowable = after_flowable[cite: 13]
+    doc.afterFlowable = after_flowable
 
-    historia = [][cite: 13]
-    historia.append(NextPageTemplate("TOC"))[cite: 13]
-    historia.append(PageBreak())[cite: 13]
-    historia.append(Paragraph("Índice", e_toc_title))[cite: 13]
-    historia.append(toc)[cite: 13]
-    historia.append(NextPageTemplate("CUERPO"))[cite: 13]
-    historia.append(PageBreak())[cite: 13]
+    historia = []
+    historia.append(NextPageTemplate("TOC"))
+    historia.append(PageBreak())
+    historia.append(Paragraph("Índice", e_toc_title))
+    historia.append(toc)
+    historia.append(NextPageTemplate("CUERPO"))
+    historia.append(PageBreak())
 
     for tipo, contenido, _ in resultados:
-        if not contenido or not contenido.strip(): continue[cite: 13]
-        contenido_escape = escape(contenido.strip())[cite: 13]
-        if tipo == "titulo_capitulo": historia.append(Paragraph(contenido_escape, e_cap))[cite: 13]
-        elif tipo == "titulo_seccion": historia.append(Paragraph(contenido_escape, e_sec))[cite: 13]
-        else: historia.append(Paragraph(contenido_escape, e_norm))[cite: 13]
+        if not contenido or not contenido.strip(): continue
+        contenido_escape = escape(contenido.strip())
+        if tipo == "titulo_capitulo": historia.append(Paragraph(contenido_escape, e_cap))
+        elif tipo == "titulo_seccion": historia.append(Paragraph(contenido_escape, e_sec))
+        else: historia.append(Paragraph(contenido_escape, e_norm))
 
-    doc.multiBuild(historia)[cite: 13]
-    buffer.seek(0)[cite: 13]
-    return buffer.getvalue()[cite: 13]
+    doc.multiBuild(historia)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ============================================================
 # LOG DE OPERACIÓN
@@ -414,10 +404,10 @@ st.set_page_config(page_title="Traductor Académico (Industrial)", layout="cente
 st.title("📚 Traductor de PDFs Académicos (Industrial)")
 st.markdown("Equipado con **Checkpoints atómicos en disco**, telemetría en tiempo real, exportación en formato Libro y formato Word nativo.")
 
-if "traduccion_lista" not in st.session_state: st.session_state.traduccion_lista = False[cite: 13]
-if "pdf_final" not in st.session_state: st.session_state.pdf_final = None[cite: 13]
-if "word_final" not in st.session_state: st.session_state.word_final = None[cite: 13]
-if "log_final" not in st.session_state: st.session_state.log_final = None[cite: 13]
+if "traduccion_lista" not in st.session_state: st.session_state.traduccion_lista = False
+if "pdf_final" not in st.session_state: st.session_state.pdf_final = None
+if "word_final" not in st.session_state: st.session_state.word_final = None
+if "log_final" not in st.session_state: st.session_state.log_final = None
 
 archivo = st.file_uploader("Sube el PDF masivo", type="pdf")
 
@@ -449,32 +439,32 @@ if archivo is not None:
     if st.button("🚀 Procesar", type="primary", use_container_width=True):
         resultados, metricas = procesar_pipeline(st.session_state.bloques, hash_pdf, ui_metrics)
         
-        with st.spinner("Generando libro académico, Word editable y log..."):[cite: 13]
-            st.session_state.pdf_final = generar_pdf_libro(resultados, nombre_archivo=archivo.name)[cite: 13]
-            st.session_state.word_final = generar_word(resultados)[cite: 13]
-            st.session_state.log_final = generar_log(metricas, total)[cite: 13]
-            st.session_state.traduccion_lista = True[cite: 13]
+        with st.spinner("Generando libro académico, Word editable y log..."):
+            st.session_state.pdf_final = generar_pdf_libro(resultados, nombre_archivo=archivo.name)
+            st.session_state.word_final = generar_word(resultados)
+            st.session_state.log_final = generar_log(metricas, total)
+            st.session_state.traduccion_lista = True
             
-        st.rerun()[cite: 13]
+        st.rerun()
 
 if st.session_state.traduccion_lista:
     st.markdown("---")
-    st.success("🎉 Documento ensamblado exitosamente.")[cite: 13]
+    st.success("🎉 Documento ensamblado exitosamente.")
     
-    c1, c2, c3 = st.columns(3)[cite: 13]
-    with c1:[cite: 13]
+    c1, c2, c3 = st.columns(3)
+    with c1:
         st.download_button(
-            "📥 Descargar PDF (Formato Libro)", data=st.session_state.pdf_final,[cite: 13]
-            file_name="Libro_Traducido.pdf", mime="application/pdf", use_container_width=True[cite: 13]
-        )[cite: 13]
-    with c2:[cite: 13]
+            "📥 Descargar PDF (Formato Libro)", data=st.session_state.pdf_final,
+            file_name="Libro_Traducido.pdf", mime="application/pdf", use_container_width=True
+        )
+    with c2:
         st.download_button(
-            "📝 Descargar Word (.docx editable)", data=st.session_state.word_final,[cite: 13]
-            file_name="Libro_Traducido.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",[cite: 13]
-            use_container_width=True[cite: 13]
-        )[cite: 13]
-    with c3:[cite: 13]
+            "📝 Descargar Word (.docx editable)", data=st.session_state.word_final,
+            file_name="Libro_Traducido.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True
+        )
+    with c3:
         st.download_button(
-            "📋 Descargar Log de Calidad", data=st.session_state.log_final,[cite: 13]
-            file_name="Log_Operacion.txt", mime="text/plain", use_container_width=True[cite: 13]
-        )[cite: 13]
+            "📋 Descargar Log de Calidad", data=st.session_state.log_final,
+            file_name="Log_Operacion.txt", mime="text/plain", use_container_width=True
+        )
