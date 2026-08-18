@@ -292,9 +292,7 @@ def generar_pdf_libro(resultados, nombre_archivo="Documento_Traducido.pdf"):
     e_cap = ParagraphStyle("LibroCapitulo", parent=estilos["Heading1"], fontName="DejaVuSans", fontSize=16, leading=20, alignment=TA_CENTER, spaceBefore=20, spaceAfter=15, keepWithNext=True)
     e_sec = ParagraphStyle("LibroSeccion", parent=estilos["Heading2"], fontName="DejaVuSans", fontSize=13, leading=16, alignment=TA_LEFT, spaceBefore=12, spaceAfter=10, keepWithNext=True)
     e_toc_title = ParagraphStyle("TOCTitulo", parent=estilos["Title"], fontName="DejaVuSans", fontSize=20, leading=24, alignment=TA_CENTER, spaceAfter=20)
-    e_toc_cap = ParagraphStyle("TOCCapitulo", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=11, leading=15, leftIndent=0, firstLineIndent=0, spaceAfter=5)
-    e_toc_sec = ParagraphStyle("TOCSeccion", parent=estilos["Normal"], fontName="DejaVuSans", fontSize=10, leading=14, leftIndent=10*mm, firstLineIndent=0, spaceAfter=3)
-
+    
     def dibujar_portada(canvas, doc):
         canvas.saveState()
         titulo = Paragraph("Traducción Académica", ParagraphStyle("PortadaTitulo", fontName="DejaVuSans", fontSize=26, leading=32, alignment=TA_CENTER))
@@ -339,29 +337,33 @@ def generar_pdf_libro(resultados, nombre_archivo="Documento_Traducido.pdf"):
         ParagraphStyle("TOCLevel2", fontName="DejaVuSans", fontSize=10, leading=14, leftIndent=10*mm, firstLineIndent=0, spaceBefore=2, spaceAfter=2)
     ]
 
-    contador_titulos = [0]
-    
+    # ------------------------------------------------------------
+    # REGISTRO DE TÍTULOS PARA EL TOC (FIJOS PARA MULTIBUILD)
+    # ------------------------------------------------------------
     def after_flowable(flowable):
-        if not isinstance(flowable, Paragraph): return
-        estilo = flowable.style.name
-        if estilo == "LibroCapitulo": nivel = 0
-        elif estilo == "LibroSeccion": nivel = 1
-        else: return
-        
-        texto = flowable.getPlainText()
-        contador_titulos[0] += 1
-        key = f"heading_{contador_titulos[0]}"
-        
-        try:
-            canvas = doc.canv
-            canvas.bookmarkPage(key)
-            canvas.addOutlineEntry(texto, key, level=nivel, closed=False)
-        except Exception:
-            pass
-        doc.notify("TOCEntry", (nivel, texto, doc.page, key))
-        
+        """
+        Detecta los atributos inyectados previamente para registrar 
+        el título en el índice de manera estable entre pasadas.
+        """
+        if hasattr(flowable, '_bookmark_key'):
+            key = flowable._bookmark_key
+            nivel = flowable._nivel
+            texto = flowable.getPlainText()
+            
+            try:
+                canvas = doc.canv
+                canvas.bookmarkPage(key)
+                canvas.addOutlineEntry(texto, key, level=nivel, closed=False)
+            except Exception:
+                pass
+            
+            doc.notify("TOCEntry", (nivel, texto, doc.page, key))
+            
     doc.afterFlowable = after_flowable
 
+    # ------------------------------------------------------------
+    # CONSTRUCCIÓN DEL STORY
+    # ------------------------------------------------------------
     historia = []
     historia.append(NextPageTemplate("TOC"))
     historia.append(PageBreak())
@@ -370,12 +372,25 @@ def generar_pdf_libro(resultados, nombre_archivo="Documento_Traducido.pdf"):
     historia.append(NextPageTemplate("CUERPO"))
     historia.append(PageBreak())
 
+    contador_ids = 0
     for tipo, contenido, _ in resultados:
         if not contenido or not contenido.strip(): continue
         contenido_escape = escape(contenido.strip())
-        if tipo == "titulo_capitulo": historia.append(Paragraph(contenido_escape, e_cap))
-        elif tipo == "titulo_seccion": historia.append(Paragraph(contenido_escape, e_sec))
-        else: historia.append(Paragraph(contenido_escape, e_norm))
+        
+        if tipo == "titulo_capitulo": 
+            p = Paragraph(contenido_escape, e_cap)
+            contador_ids += 1
+            p._bookmark_key = f"cap_{contador_ids}" # ID inmutable
+            p._nivel = 0
+            historia.append(p)
+        elif tipo == "titulo_seccion": 
+            p = Paragraph(contenido_escape, e_sec)
+            contador_ids += 1
+            p._bookmark_key = f"sec_{contador_ids}" # ID inmutable
+            p._nivel = 1
+            historia.append(p)
+        else: 
+            historia.append(Paragraph(contenido_escape, e_norm))
 
     doc.multiBuild(historia)
     buffer.seek(0)
@@ -460,12 +475,12 @@ if st.session_state.traduccion_lista:
         )
     with c2:
         st.download_button(
-            "📝 Descargar Word (.docx editable)", data=st.session_state.word_final,
+            "📝 Descargar Word (.docx)", data=st.session_state.word_final,
             file_name="Libro_Traducido.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True
         )
     with c3:
         st.download_button(
-            "📋 Descargar Log de Calidad", data=st.session_state.log_final,
+            "📋 Descargar Log", data=st.session_state.log_final,
             file_name="Log_Operacion.txt", mime="text/plain", use_container_width=True
         )
